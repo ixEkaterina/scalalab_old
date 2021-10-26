@@ -22,21 +22,23 @@ lazy val labRunner =
       assemblyJarName in assembly := s"lab-runner-assembly.jar"
     )
 
-val labTR01Main = Some("example.com.scalalab.lab-tr01.Main")
+val labTR01Main = Some("com.example.scalalab.labTR01.Main")
 
 lazy val labTR01 =
   (project in file("./lab-tr01"))
     .enablePlugins(AssemblyPlugin)
     .settings(
-      mainClass in (Compile, run) := labTR01Main,
-      mainClass in assembly := labTR01Main,
-      assemblyJarName in assembly := s"lab-tr01-assembly.jar",
+      Compile / run / mainClass := labTR01Main,
+      assembly / mainClass  := labTR01Main,
+      assembly / assemblyJarName  := s"lab-tr01.jar",
       libraryDependencies ++= Seq(
-        Spark.Core
+        Spark.Core,
+        Spark.SQL,
+        Postgres.driver
       )
     )
 
-assemblyMergeStrategy in assembly := {
+assembly / assemblyMergeStrategy := {
   case PathList("META-INF", xs @ _*) => MergeStrategy.discard
   case x => MergeStrategy.first
 }
