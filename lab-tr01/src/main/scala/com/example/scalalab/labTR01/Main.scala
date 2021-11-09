@@ -1,60 +1,131 @@
 package com.example.scalalab.labTR01
-import org.apache.spark.sql.types.{StringType, DoubleType, DateType, StructType}
+
 import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.sql.functions._
+import Args.extract
+import Utils.{getOrThrowErr, getResources}
+import org.apache.spark.sql.expressions.Window
 
 object Main {
 
-  def main(args: Array[String]):Unit = {
-    val spark = SparkSession.builder.master ("local[*]").appName ("SparklabTR01").getOrCreate ()
+  def main(args: Array[String]): Unit = {
     val params: Map[String, String] = extract(args)
 
-    println ("Hello, I'm TR01!")
-    val path = "C:\\Users\\rusta\\Documents\\scala_neoflex\\scalalab\\dataCSVAgreements.csv"
-    val csv = readCSV(spark, path)
-    csv.show(3)
+    val path = getOrThrowErr(params, "path_csv")
 
-    spark.stop ()
+    val spark = SparkSession.builder
+      .master("local[*]")
+      .appName("SparklabTR01")
+      .getOrCreate()
+
+    val reader = new ExternalReader(spark)
+    val csv = reader.readCSV(path)
+
+    val fioFromDB = reader.selectFromDB(params, getResources("query.sql"))
+
+    val balanceFromDB = reader
+      .selectFromDB(params, getResources("balance.sql"))
+      .withColumn("act_balance", col("act_balance").cast("decimal(25,2)"))
+
+    val leftJoinDF = fioFromDB
+      .join(csv, Seq("name"), "left")
+      .join(balanceFromDB, Seq("id"), "left")
+
+    val windowSpec  = Window.partitionBy("ledger")
+    val sum_balancedf:DataFrame = leftJoinDF
+      .select("ledger", "act_balance")
+      .withColumn("sum_balance",sum("act_balance").over(windowSpec))
+      .drop("act_balance")
+      .distinct()
+
+
+    val select_df = leftJoinDF
+      .join(sum_balancedf, Seq("ledger"), "inner")
+      .select(
+        col("name"),
+        col("CN"),
+        col("account_number"),
+        col("ledger"),
+        col("id"),
+        col("act_balance"),
+        col("sum_balance")
+    )
+
+    val resDF = makeResultWithUDF(select_df)
+
+    val writePath = getOrThrowErr(params, "write_path")
+
+    resDF
+      .coalesce(1)
+      .sort("name")
+      .write
+      .format("text")
+      .mode("overwrite")
+      .save(writePath)
+
+    spark.stop()
   }
 
-  def extract(args: Array[String]): Map[String, String] = {
-   args
-     .map(_.split("="))
-     .map( t => ( t(0), t(1) ))
-     .toMap
+  def makeResultWithMapPartition(df: DataFrame) = {
+
+    def combine(fio: String, cn: String, ac: String, ledger: String, actBalance: String, sumBalance: String): String =
+         s"""ФИО: $fio
+         |Номер договора: $cn
+         |Лицевой счет клиента: $ac
+         |Актуальный баланс по лицевому счету: $actBalance
+         |Суммарный баланс по балансовому счету $ledger: $sumBalance
+         |""".stripMargin
+
+    import df.sparkSession.implicits._
+
+    df.select(
+        col("name"),
+        col("CN"),
+        col("account_number"),
+        col("ledger"),
+        col("act_balance"),
+        col("sum_balance")
+
+      )
+      .mapPartitions(iterator => {
+        iterator.map(row => {
+          combine(
+            row.getString(0),
+            row.getString(1),
+            row.getString(2),
+            row.getString(3),
+            row.getString(4),
+            row.getString(5)
+          )
+        })
+
+      })
+      .toDF("result")
   }
 
-  def selectFromDB(spark: SparkSession, params: Map[String, String], tableOrQuery: String): DataFrame = {
+  def makeResultWithUDF(df: DataFrame) = {
+    val getResUDF =
+      udf((fio: String, cn: String, ac: String, ledger: String, actBalance: String, sumBalance: String) => {
+        s"""ФИО: $fio
+           |Номер договора: $cn
+           |Лицевой счет клиента: $ac
+           |Актуальный баланс по лицевому счету: $actBalance
+           |Суммарный баланс по балансовому счету $ledger: $sumBalance
+           |""".stripMargin
+      })
 
-    spark
-      .read
-      .format("jdbc")
-      .option("url", params.getOrElse("jdbc_uri", throw new IllegalArgumentException("jdbc_uri not found")))
-      .option("dbtable", tableOrQuery)
-      .option("user", "username")
-      .option("password", "password")
-      .load()
+    df.withColumn(
+        "result",
+        getResUDF(col("name"),
+                  col("CN"),
+                  col("account_number"),
+                  col("ledger"),
+                  col("act_balance"),
+                  col("sum_balance")
+                )
+      )
+      .select("result")
 
   }
 
-  def readCSV(spark: SparkSession, path: String): DataFrame = {
-    val schema = new StructType()
-      .add("name",StringType,false)
-      .add("birth_date",DateType,false)
-      .add("inn",StringType,false)
-      .add("passport",StringType,false)
-      .add("branch",StringType,false)
-      .add("NP",StringType,false)
-      .add("open_date",DateType,false)
-      .add("close_date",DateType,true)
-      .add("col9",DoubleType,true)
-      .add("col10",StringType,true)
-
-    val df = spark
-      .read
-      .options(Map("delimiter"->";","header"->"false", "dateFormat"->"dd.MM.yyyy"))
-      .schema(schema)
-      .csv(path)
-    
-    df
-  }
 }

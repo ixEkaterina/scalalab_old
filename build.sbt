@@ -37,10 +37,13 @@ lazy val labTR01 =
         Postgres.driver
       )
     )
-
-assembly / assemblyMergeStrategy := {
-  case PathList("META-INF", xs @ _*) => MergeStrategy.discard
-  case x => MergeStrategy.first
+ThisBuild / assemblyMergeStrategy := {
+  case PathList("org",xs @ _*)         => MergeStrategy.first
+  case PathList("javax",xs @ _*)         => MergeStrategy.first
+  case x if x.contains(".properties") => MergeStrategy.first
+  case x =>
+    val oldStrategy = (ThisBuild / assemblyMergeStrategy).value
+    oldStrategy(x)
 }
 
 // See https://www.scala-sbt.org/1.x/docs/Using-Sonatype.html for instructions on how to publish to Sonatype.
